@@ -32,5 +32,4 @@ Prompt można dostosować do konkretnego modelu (np. Copilot, ChatGPT, Claude) l
 
 
 
-https://github.com/cgohlke/numpy-mkl-wheels/releases/tag/v2025.6.2
-pip install c:\_cloud\_pyOpenEXR\mkl_fft-1.3.14-cp313-cp313-win_amd64.whl     
+https://pypi.org/project/kriptomatte/
