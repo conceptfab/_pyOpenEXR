@@ -141,6 +141,98 @@ class ImageProcessor:
             return None
     
     @staticmethod
+    def prepare_rgb_preview_linear(part_data, layer_name):
+        """
+        Przygotowuje oryginalne dane liniowe RGB (bez konwersji sRGB) dla ekspozycji/gammy.
+        
+        Args:
+            part_data (dict): Dane części pliku EXR
+            layer_name (str): Nazwa warstwy
+            
+        Returns:
+            numpy.ndarray: Oryginalne dane RGB w przestrzeni liniowej (float32)
+        """
+        print(f"[INFO] Przygotowanie liniowych danych RGB dla warstwy: {layer_name}", file=sys.stderr)
+        
+        # Użyj już załadowanych danych z part_data
+        channels = part_data.get("channels", {})
+        layers = part_data.get("layers", {})
+        
+        # Znajdź kanały RGB w warstwie
+        layer_channels = layers.get(layer_name, [])
+        r_ch = None
+        g_ch = None  
+        b_ch = None
+        
+        # Szukaj kanałów R, G, B
+        for ch_name in layer_channels:
+            ch_str = str(ch_name)
+            if ch_str.endswith('.R') or ch_str == 'R':
+                r_ch = ch_str
+            elif ch_str.endswith('.G') or ch_str == 'G':
+                g_ch = ch_str
+            elif ch_str.endswith('.B') or ch_str == 'B':
+                b_ch = ch_str
+        
+        # Sprawdź czy mamy wszystkie kanały RGB
+        if not (r_ch and g_ch and b_ch):
+            print(f"[WARN] Brak kanałów RGB w warstwie {layer_name}. Dostępne kanały: {layer_channels}", file=sys.stderr)
+            return None
+            
+        # Pobierz dane kanałów
+        r_data = channels.get(r_ch)
+        g_data = channels.get(g_ch)
+        b_data = channels.get(b_ch)
+        
+        if r_data is None or g_data is None or b_data is None:
+            print(f"[ERROR] Brak danych dla kanałów RGB", file=sys.stderr)
+            return None
+            
+        try:
+            # Złóż kanały w obraz RGB (w przestrzeni liniowej) - BEZ konwersji sRGB
+            rgb_linear = np.stack([r_data, g_data, b_data], axis=-1).astype(np.float32)
+            
+            print(f"[INFO] Pomyślnie utworzono liniowe dane RGB: {rgb_linear.shape}", file=sys.stderr)
+            return rgb_linear
+            
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas tworzenia liniowych danych RGB: {e}", file=sys.stderr)
+            return None
+    
+    @staticmethod
+    def apply_color_correction(linear_image, exposure=0.0, gamma=2.2):
+        """
+        Stosuje korekcję ekspozycji i gammy do liniowych danych obrazu.
+
+        Args:
+            linear_image (np.array): Tablica NumPy z danymi float (liniowymi).
+            exposure (float): Wartość ekspozycji w "przystankach" (stops).
+            gamma (float): Wartość gammy.
+
+        Returns:
+            np.array: Tablica NumPy uint8 (0-255) gotowa do wyświetlenia.
+        """
+        if linear_image is None:
+            return None
+            
+        # Krok 1: Zastosuj ekspozycję (na danych liniowych)
+        exposed_image = linear_image * (2.0 ** exposure)
+
+        # Krok 2: Zastosuj korekcję gamma
+        # Zabezpieczenie, aby gamma nie była zerem ani ujemna
+        safe_gamma = max(gamma, 0.01)
+        gammad_image = np.power(np.clip(exposed_image, 0.0, None), 1.0 / safe_gamma)
+        
+        # Krok 3: Przygotuj do wyświetlenia
+        # Ogranicz wartości do zakresu [0, 1], aby uniknąć błędów przy konwersji
+        clipped_image = np.clip(gammad_image, 0.0, 1.0)
+        
+        # Konwertuj na 8-bitowy format całkowitoliczbowy (0-255)
+        final_image_uint8 = (clipped_image * 255).astype(np.uint8)
+
+        return final_image_uint8
+    
+    @staticmethod
     def linear_to_srgb(linear_image):
         """
         Konwertuje obraz z liniowej przestrzeni barw na sRGB.

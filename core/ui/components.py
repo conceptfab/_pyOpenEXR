@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QDoubleSpinBox,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,18 +111,98 @@ class ControlPanel:
         edit_widget = QWidget()
         edit_layout = QFormLayout(edit_widget)
         
+        # Jasność: -1.0 do 1.0
+        brightness_container = QHBoxLayout()
         brightness_slider = QSlider(Qt.Orientation.Horizontal)
         brightness_slider.setRange(-100, 100)
         brightness_slider.setValue(0)
+        brightness_spinbox = QDoubleSpinBox()
+        brightness_spinbox.setRange(-1.0, 1.0)
+        brightness_spinbox.setSingleStep(0.01)
+        brightness_spinbox.setDecimals(2)
+        brightness_spinbox.setValue(0.0)
+        brightness_container.addWidget(brightness_slider)
+        brightness_container.addWidget(brightness_spinbox)
 
+        # Kontrast: 0.0 do 3.0
+        contrast_container = QHBoxLayout()
         contrast_slider = QSlider(Qt.Orientation.Horizontal)
         contrast_slider.setRange(0, 300)  # 100 = 1.0
         contrast_slider.setValue(100)
+        contrast_spinbox = QDoubleSpinBox()
+        contrast_spinbox.setRange(0.0, 3.0)
+        contrast_spinbox.setSingleStep(0.01)
+        contrast_spinbox.setDecimals(2)
+        contrast_spinbox.setValue(1.0)
+        contrast_container.addWidget(contrast_slider)
+        contrast_container.addWidget(contrast_spinbox)
 
-        edit_layout.addRow("Jasność:", brightness_slider)
-        edit_layout.addRow("Kontrast:", contrast_slider)
+        # Ekspozycja: -5.0 do +5.0 przystanków (stops)
+        exposure_container = QHBoxLayout()
+        exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        exposure_slider.setRange(-500, 500)  # -5.0 do +5.0 (dzielone przez 100)
+        exposure_slider.setValue(0)
+        exposure_spinbox = QDoubleSpinBox()
+        exposure_spinbox.setRange(-5.0, 5.0)
+        exposure_spinbox.setSingleStep(0.01)
+        exposure_spinbox.setDecimals(2)
+        exposure_spinbox.setValue(0.0)
+        exposure_spinbox.setSuffix(" stops")
+        exposure_container.addWidget(exposure_slider)
+        exposure_container.addWidget(exposure_spinbox)
+
+        # Gamma: 0.5 do 5.0
+        gamma_container = QHBoxLayout()
+        gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        gamma_slider.setRange(50, 500)  # 0.5 do 5.0 (dzielone przez 100)
+        gamma_slider.setValue(220)  # domyślnie 2.2
+        gamma_spinbox = QDoubleSpinBox()
+        gamma_spinbox.setRange(0.5, 5.0)
+        gamma_spinbox.setSingleStep(0.01)
+        gamma_spinbox.setDecimals(2)
+        gamma_spinbox.setValue(2.2)
+        gamma_container.addWidget(gamma_slider)
+        gamma_container.addWidget(gamma_spinbox)
+
+        # Dodaj kontenery do layoutu
+        edit_layout.addRow("Jasność:", brightness_container)
+        edit_layout.addRow("Kontrast:", contrast_container)
+        edit_layout.addRow("Ekspozycja:", exposure_container)
+        edit_layout.addRow("Gamma:", gamma_container)
         
-        return edit_widget, brightness_slider, contrast_slider
+        # Synchronizuj suwaki z spinboxami
+        ControlPanel._sync_slider_spinbox(brightness_slider, brightness_spinbox, 100.0)
+        ControlPanel._sync_slider_spinbox(contrast_slider, contrast_spinbox, 100.0)
+        ControlPanel._sync_slider_spinbox(exposure_slider, exposure_spinbox, 100.0)
+        ControlPanel._sync_slider_spinbox(gamma_slider, gamma_spinbox, 100.0)
+        
+        return (edit_widget, brightness_slider, contrast_slider, exposure_slider, gamma_slider,
+                brightness_spinbox, contrast_spinbox, exposure_spinbox, gamma_spinbox)
+    
+    @staticmethod
+    def _sync_slider_spinbox(slider, spinbox, scale_factor):
+        """
+        Synchronizuje suwak ze spinboxem.
+        
+        Args:
+            slider (QSlider): Suwak
+            spinbox (QDoubleSpinBox): Spinbox
+            scale_factor (float): Współczynnik skalowania (slider_value / scale_factor = spinbox_value)
+        """
+        # Synchronizuj slider -> spinbox
+        def slider_changed(value):
+            spinbox.blockSignals(True)
+            spinbox.setValue(value / scale_factor)
+            spinbox.blockSignals(False)
+        
+        # Synchronizuj spinbox -> slider
+        def spinbox_changed(value):
+            slider.blockSignals(True)
+            slider.setValue(int(value * scale_factor))
+            slider.blockSignals(False)
+        
+        slider.valueChanged.connect(slider_changed)
+        spinbox.valueChanged.connect(spinbox_changed)
 
 
 class MetadataPanel:

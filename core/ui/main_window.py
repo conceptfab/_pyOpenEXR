@@ -31,6 +31,7 @@ class EXREditor(QMainWindow):
 
         self.exr_data = None
         self.current_preview_data = None
+        self.original_linear_data = None  # Oryginalne dane liniowe dla ekspozycji/gammy
         self.file_thread = None
 
         self._init_ui()
@@ -61,9 +62,20 @@ class EXREditor(QMainWindow):
         right_container.addWidget(self.image_preview)
 
         # --- Panel prawy: Edycja i metadane ---
-        self.control_widget, self.brightness_slider, self.contrast_slider = ControlPanel.create_control_widget()
+        (self.control_widget, self.brightness_slider, self.contrast_slider, self.exposure_slider, self.gamma_slider,
+         self.brightness_spinbox, self.contrast_spinbox, self.exposure_spinbox, self.gamma_spinbox) = ControlPanel.create_control_widget()
+        
+        # Połącz suwaki z update_display
         self.brightness_slider.valueChanged.connect(self.update_display)
         self.contrast_slider.valueChanged.connect(self.update_display)
+        self.exposure_slider.valueChanged.connect(self.update_display)
+        self.gamma_slider.valueChanged.connect(self.update_display)
+        
+        # Połącz spinboxy z update_display
+        self.brightness_spinbox.valueChanged.connect(self.update_display)
+        self.contrast_spinbox.valueChanged.connect(self.update_display)
+        self.exposure_spinbox.valueChanged.connect(self.update_display)
+        self.gamma_spinbox.valueChanged.connect(self.update_display)
 
         self.metadata_table = MetadataPanel.create_metadata_widget()
         self.tabs = TabManager.create_tab_widget(self.control_widget, self.metadata_table)
@@ -159,6 +171,7 @@ class EXREditor(QMainWindow):
         MetadataHandler.populate_metadata_table(self.metadata_table, header)
 
         self.current_preview_data = None
+        self.original_linear_data = None
 
         # Wybór danych do podglądu
         if item_type == "layer":
@@ -168,6 +181,11 @@ class EXREditor(QMainWindow):
             )
         elif item_type == "rgb_preview":
             layer_name = rest[0]
+            # Dla RGB zapisz oryginalne dane liniowe
+            self.original_linear_data = ImageProcessor.prepare_rgb_preview_linear(
+                part_data, layer_name=layer_name
+            )
+            # I przygotuj wersję do wyświetlenia
             self.current_preview_data = ImageProcessor.prepare_rgb_preview(
                 part_data, layer_name=layer_name
             )
@@ -177,9 +195,15 @@ class EXREditor(QMainWindow):
                 part_data, "channel", channel_name=ch_name
             )
 
-        # Zresetuj suwaki i odśwież podgląd
+        # Zresetuj suwaki i spinboxy, potem odśwież podgląd
         self.brightness_slider.setValue(0)
+        self.brightness_spinbox.setValue(0.0)
         self.contrast_slider.setValue(100)
+        self.contrast_spinbox.setValue(1.0)
+        self.exposure_slider.setValue(0)
+        self.exposure_spinbox.setValue(0.0)
+        self.gamma_slider.setValue(220)  # 2.2
+        self.gamma_spinbox.setValue(2.2)
         self.update_display()
 
     def update_display(self):
@@ -191,11 +215,25 @@ class EXREditor(QMainWindow):
         # Pobierz wartości z suwaków
         brightness = self.brightness_slider.value() / 100.0
         contrast = self.contrast_slider.value() / 100.0
+        exposure = self.exposure_slider.value() / 100.0  # -5.0 do +5.0
+        gamma = self.gamma_slider.value() / 100.0  # 0.5 do 5.0
 
-        # Zastosuj korekty i konwertuj na obraz
-        adjusted_data = ImageProcessor.apply_display_adjustments(
-            self.current_preview_data, brightness, contrast
-        )
+        # Sprawdź czy mamy oryginalne dane liniowe (dla RGB)
+        if self.original_linear_data is not None:
+            # Zastosuj ekspozycję i gamma na oryginalnych danych liniowych
+            processed_data = ImageProcessor.apply_color_correction(
+                self.original_linear_data, exposure, gamma
+            )
+            # Następnie zastosuj pozostałe korekty
+            adjusted_data = ImageProcessor.apply_display_adjustments(
+                processed_data, brightness, contrast
+            )
+        else:
+            # Dla pojedynczych kanałów zastosuj tylko podstawowe korekty
+            adjusted_data = ImageProcessor.apply_display_adjustments(
+                self.current_preview_data, brightness, contrast
+            )
+        
         q_image = ImageProcessor.numpy_to_qimage(adjusted_data)
         pixmap = ImageProcessor.create_scaled_pixmap(q_image, self.image_preview.size())
         
