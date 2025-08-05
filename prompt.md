@@ -29,3 +29,8 @@ Każda zmiana widoczna natychmiast w podglądzie.
 Stabilność dla dużych plików (asynchroniczny odczyt/zapis).
 
 Prompt można dostosować do konkretnego modelu (np. Copilot, ChatGPT, Claude) lub przekazać programiście. Wszystkie najważniejsze szczegóły dotyczące obsługi warstw, kanałów, elementów edytowalnych i specyfiki EXR są już w nim zawarte.
+
+
+
+https://github.com/cgohlke/numpy-mkl-wheels/releases/tag/v2025.6.2
+pip install c:\_cloud\_pyOpenEXR\mkl_fft-1.3.14-cp313-cp313-win_amd64.whl     
