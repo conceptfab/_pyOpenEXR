@@ -30,8 +30,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Importujemy kompletną klasę EXREditor z oryginalnego pliku exr.py
-from exr import EXREditor
+# Importujemy kompletną klasę EXREditor z modułu core.ui.main_window
+from core.ui.main_window import EXREditor
 
 # Punkt wejścia aplikacji
 if __name__ == "__main__":
