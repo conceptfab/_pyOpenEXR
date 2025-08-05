@@ -1,49 +1,31 @@
-import sys
+"""
+Moduł do odczytu plików OpenEXR.
+"""
+
 import logging
+import sys
 import Imath
 import numpy as np
 import OpenEXR
-from PyQt6.QtCore import QThread, pyqtSignal
+
+logger = logging.getLogger(__name__)
 
 
-# --- Wątek do asynchronicznego ładowania/zapisu plików ---
-# Aby uniknąć blokowania GUI przy dużych plikach
-class FileOperationThread(QThread):
+class EXRReader:
     """
-    Wątek do obsługi operacji plikowych (odczyt/zapis) w tle,
-    aby interfejs użytkownika pozostał responsywny.
+    Klasa odpowiedzialna za odczyt plików OpenEXR.
     """
-
-    finished = pyqtSignal(object)
-    error = pyqtSignal(str)
-
-    def __init__(self, filepath, operation="load", data_to_save=None):
-        super().__init__()
-        self.filepath = filepath
-        self.operation = operation
-        self.data_to_save = data_to_save
-        print(f"[INFO] Inicjalizacja wątku operacji plikowej: {operation} - {filepath}", file=sys.stderr)
-
-    def run(self):
-        try:
-            print(f"[INFO] Rozpoczęcie operacji: {self.operation}", file=sys.stderr)
-            if self.operation == "load":
-                data = self._load_exr()
-                print("[INFO] Plik został pomyślnie załadowany", file=sys.stderr)
-                self.finished.emit(data)
-            elif self.operation == "save" and self.data_to_save:
-                self._save_exr()
-                print("[INFO] Plik został pomyślnie zapisany", file=sys.stderr)
-                self.finished.emit(None)  # Sygnalizuje zakończenie zapisu
-        except Exception as e:
-            print(f"[ERROR] Błąd podczas operacji na pliku: {e}", file=sys.stderr)
-            self.error.emit(f"Wystąpił błąd podczas operacji na pliku:\n{e}")
-
-    def _load_exr(self):
-        """Wczytuje dane z pliku EXR."""
-        print(f"[INFO] Sprawdzanie czy plik jest prawidłowym plikiem OpenEXR: {self.filepath}", file=sys.stderr)
-        if not OpenEXR.isOpenExrFile(self.filepath):
-            print(f"[ERROR] Plik nie jest prawidłowym plikiem OpenEXR: {self.filepath}", file=sys.stderr)
+    
+    @staticmethod
+    def is_valid_exr_file(filepath):
+        """Sprawdza czy plik jest prawidłowym plikiem OpenEXR."""
+        return OpenEXR.isOpenExrFile(filepath)
+    
+    @staticmethod
+    def read_exr_file(filepath):
+        print(f"[INFO] Sprawdzanie czy plik jest prawidłowym plikiem OpenEXR: {filepath}", file=sys.stderr)
+        if not OpenEXR.isOpenExrFile(filepath):
+            print(f"[ERROR] Plik nie jest prawidłowym plikiem OpenEXR: {filepath}", file=sys.stderr)
             raise ValueError("To nie jest prawidłowy plik OpenEXR.")
 
         # Obsługa różnych wersji modułu OpenEXR:
@@ -51,7 +33,7 @@ class FileOperationThread(QThread):
         # - nowsze buildy mogą wspierać multipart, ale Twój błąd wskazuje na brak tej klasy
         if hasattr(OpenEXR, "MultiPartInputFile"):
             print("[INFO] Używanie MultiPartInputFile (nowsza wersja OpenEXR)", file=sys.stderr)
-            exr_file = OpenEXR.MultiPartInputFile(self.filepath)
+            exr_file = OpenEXR.MultiPartInputFile(filepath)
             parts = exr_file.parts()
             part_getter = lambda idx: exr_file.get_part(idx)
             multipart = True
@@ -59,7 +41,7 @@ class FileOperationThread(QThread):
             # Fallback: Single-part odczyt przy użyciu InputFile
             # Emulujemy strukturę multipart z jedną częścią "default"
             print("[INFO] Używanie InputFile (starsza wersja OpenEXR)", file=sys.stderr)
-            input_file = OpenEXR.InputFile(self.filepath)
+            input_file = OpenEXR.InputFile(filepath)
             header = input_file.header()
             # Obsługa różnych formatów header - może być dict lub obiekt
             if hasattr(header, "dataWindow"):
@@ -70,7 +52,7 @@ class FileOperationThread(QThread):
 
             # Zbuduj pseudo-part
             print(f"[INFO] Rozmiar obrazu: {size[0]}x{size[1]} pikseli", file=sys.stderr)
-            loaded_data = {"parts": [], "filepath": self.filepath}
+            loaded_data = {"parts": [], "filepath": filepath}
             part_data = {
                 "name": "default",
                 "header": header,
@@ -159,7 +141,7 @@ class FileOperationThread(QThread):
             return loaded_data
 
         print(f"[INFO] Znaleziono {len(parts)} części w pliku EXR", file=sys.stderr)
-        loaded_data = {"parts": [], "filepath": self.filepath}
+        loaded_data = {"parts": [], "filepath": filepath}
 
         for i, part_name in enumerate(parts):
             print(f"[INFO] Przetwarzanie części {i+1}/{len(parts)}: {part_name}", file=sys.stderr)
@@ -212,27 +194,4 @@ class FileOperationThread(QThread):
             loaded_data["parts"].append(part_data)
             print(f"[INFO] Zakończono przetwarzanie części {part_name}", file=sys.stderr)
 
-        return loaded_data
-
-    def _save_exr(self):
-        """Zapisuje dane do pliku EXR."""
-        headers = []
-        parts_data = []
-
-        for part_info in self.data_to_save["parts"]:
-            header = OpenEXR.Header(part_info["size"][0], part_info["size"][1])
-            # Kopiuj/zaktualizuj metadane
-            original_header = part_info["header"]
-            for key, value in original_header.items():
-                header[key] = value
-
-            # Przygotuj dane kanałów do zapisu
-            channels_to_write = {}
-            for ch_name, np_array in part_info["channels"].items():
-                channels_to_write[ch_name] = np_array.tobytes()
-
-            headers.append(header)
-            parts_data.append(channels_to_write)
-
-        exr_output = OpenEXR.MultiPartOutputFile(self.filepath, headers)
-        exr_output.writePixels(parts_data)
+        return loaded_data 
