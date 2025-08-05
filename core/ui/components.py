@@ -72,6 +72,10 @@ class TreeNavigator:
                 layer_item = QTreeWidgetItem(part_item, [layer_name, "Warstwa"])
                 layer_item.setData(0, Qt.ItemDataRole.UserRole, ("layer", i, layer_name))
 
+                # Dodaj opcję podglądu RGB dla warstwy
+                rgb_item = QTreeWidgetItem(layer_item, ["RGB Podgląd", "RGB"])
+                rgb_item.setData(0, Qt.ItemDataRole.UserRole, ("rgb_preview", i, layer_name))
+
                 for ch_name in channel_list:
                     ch_name_s = str(ch_name)
                     channel_item = QTreeWidgetItem(layer_item, [ch_name_s, "Kanał"])

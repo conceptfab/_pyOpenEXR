@@ -76,23 +76,109 @@ class ImageProcessor:
         return channels.get(channel_name)
     
     @staticmethod
+    def prepare_rgb_preview(part_data, layer_name):
+        """
+        Przygotowuje podgląd RGB dla określonej warstwy - prosta, niezawodna implementacja.
+        
+        Args:
+            part_data (dict): Dane części pliku EXR
+            layer_name (str): Nazwa warstwy
+            
+        Returns:
+            numpy.ndarray: Dane RGB do wyświetlenia (już skonwertowane do sRGB)
+        """
+        print(f"[INFO] Przygotowanie podglądu RGB dla warstwy: {layer_name}", file=sys.stderr)
+        
+        # Użyj już załadowanych danych z part_data zamiast ponownego otwierania pliku
+        channels = part_data.get("channels", {})
+        layers = part_data.get("layers", {})
+        
+        # Znajdź kanały RGB w warstwie
+        layer_channels = layers.get(layer_name, [])
+        r_ch = None
+        g_ch = None  
+        b_ch = None
+        
+        # Szukaj kanałów R, G, B
+        for ch_name in layer_channels:
+            ch_str = str(ch_name)
+            if ch_str.endswith('.R') or ch_str == 'R':
+                r_ch = ch_str
+            elif ch_str.endswith('.G') or ch_str == 'G':
+                g_ch = ch_str
+            elif ch_str.endswith('.B') or ch_str == 'B':
+                b_ch = ch_str
+        
+        # Sprawdź czy mamy wszystkie kanały RGB
+        if not (r_ch and g_ch and b_ch):
+            print(f"[WARN] Brak kanałów RGB w warstwie {layer_name}. Dostępne kanały: {layer_channels}", file=sys.stderr)
+            return None
+            
+        # Pobierz dane kanałów
+        r_data = channels.get(r_ch)
+        g_data = channels.get(g_ch)
+        b_data = channels.get(b_ch)
+        
+        if r_data is None or g_data is None or b_data is None:
+            print(f"[ERROR] Brak danych dla kanałów RGB", file=sys.stderr)
+            return None
+            
+        print(f"[INFO] Znaleziono kanały RGB: {r_ch}, {g_ch}, {b_ch}", file=sys.stderr)
+        print(f"[INFO] Rozmiar danych: R={r_data.shape}, G={g_data.shape}, B={b_data.shape}", file=sys.stderr)
+        
+        try:
+            # Złóż kanały w obraz RGB (w przestrzeni liniowej)
+            rgb_linear = np.stack([r_data, g_data, b_data], axis=-1).astype(np.float32)
+            
+            # Konwertuj z liniowej przestrzeni barw na sRGB
+            rgb_srgb = ImageProcessor.linear_to_srgb(rgb_linear)
+            
+            print(f"[INFO] Pomyślnie utworzono podgląd RGB: {rgb_srgb.shape}", file=sys.stderr)
+            return rgb_srgb
+            
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas tworzenia podglądu RGB: {e}", file=sys.stderr)
+            return None
+    
+    @staticmethod
+    def linear_to_srgb(linear_image):
+        """
+        Konwertuje obraz z liniowej przestrzeni barw na sRGB.
+        To KLUCZOWY krok, aby obraz nie był za ciemny!
+        """
+        # Zastosuj formułę konwersji sRGB
+        srgb_image = np.where(
+            linear_image <= 0.0031308,
+            linear_image * 12.92,
+            1.055 * (linear_image ** (1/2.4)) - 0.055
+        )
+        # Ogranicz wartości do zakresu [0, 1] i konwertuj na 8-bit
+        srgb_image = np.clip(srgb_image, 0.0, 1.0)
+        return (srgb_image * 255).astype(np.uint8)
+    
+    @staticmethod
     def apply_display_adjustments(image_data, brightness=0.0, contrast=1.0):
         """
         Stosuje korekty jasności i kontrastu do danych obrazu.
         
         Args:
-            image_data (numpy.ndarray): Dane obrazu
+            image_data (numpy.ndarray): Dane obrazu (8-bit lub float)
             brightness (float): Wartość jasności (-1.0 do 1.0)
             contrast (float): Wartość kontrastu (0.0 do 3.0)
             
         Returns:
-            numpy.ndarray: Skorygowane dane obrazu
+            numpy.ndarray: Skorygowane dane obrazu (8-bit)
         """
         if image_data is None:
             return None
             
         # Kopiuj dane, aby nie modyfikować oryginału
         display_data = image_data.copy()
+        
+        # Sprawdź czy dane są już 8-bit (RGB) czy float (EXR)
+        if display_data.dtype == np.uint8:
+            # Konwertuj 8-bit na float [0,1] dla przetwarzania
+            display_data = display_data.astype(np.float32) / 255.0
         
         # Prosta edycja podglądu (nie modyfikuje danych źródłowych EXR)
         display_data = (display_data - 0.5) * contrast + 0.5 + brightness
@@ -117,9 +203,16 @@ class ImageProcessor:
             
         height, width = image_data.shape[:2]
 
-        if image_data.ndim == 3:  # Obraz kolorowy (RGBA)
-            q_image_format = QImage.Format.Format_RGBA8888
-            bytes_per_line = 4 * width
+        if image_data.ndim == 3:  # Obraz kolorowy
+            if image_data.shape[2] == 4:  # RGBA
+                q_image_format = QImage.Format.Format_RGBA8888
+                bytes_per_line = 4 * width
+            elif image_data.shape[2] == 3:  # RGB
+                q_image_format = QImage.Format.Format_RGB888
+                bytes_per_line = 3 * width
+            else:
+                print(f"[WARN] Nieobsługiwany format kolorowy: {image_data.shape[2]} kanałów", file=sys.stderr)
+                return None
         else:  # Skala szarości
             q_image_format = QImage.Format.Format_Grayscale8
             bytes_per_line = 1 * width

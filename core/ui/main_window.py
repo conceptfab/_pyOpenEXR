@@ -166,6 +166,11 @@ class EXREditor(QMainWindow):
             self.current_preview_data = ImageProcessor.prepare_preview_data(
                 part_data, "layer", layer_name=layer_name
             )
+        elif item_type == "rgb_preview":
+            layer_name = rest[0]
+            self.current_preview_data = ImageProcessor.prepare_rgb_preview(
+                part_data, layer_name=layer_name
+            )
         elif item_type == "channel":
             ch_name = str(rest[0])
             self.current_preview_data = ImageProcessor.prepare_preview_data(

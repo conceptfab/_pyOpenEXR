@@ -59,6 +59,7 @@ class EXRReader:
                 "size": size,
                 "channels": {},
                 "layers": {},
+                "filepath": filepath,
             }
 
             # Kanały z nagłówka w starszych bindingach: header['channels'] to dict name->Imath.Channel
@@ -161,6 +162,7 @@ class EXRReader:
                 "size": size,
                 "channels": {},
                 "layers": {},
+                "filepath": filepath,
             }
 
             # Grupuj kanały w warstwy
