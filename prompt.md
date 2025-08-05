@@ -33,3 +33,12 @@ Prompt można dostosować do konkretnego modelu (np. Copilot, ChatGPT, Claude) l
 
 
 https://pypi.org/project/kriptomatte/
+
+
+Główne Opcje dla Rusta
+1. Crate exr (Zalecane)
+Jest to wysokopoziomowa, bezpieczna i "idiomatyczna" biblioteka w Ruście. Co to oznacza w praktyce:
+Bezpieczeństwo Pamięci: Napisana w dużej mierze w czystym Ruście, co gwarantuje bezpieczeństwo pamięci i unikanie błędów typowych dla C++.
+Proste API: Oferuje łatwy w użyciu interfejs do odczytu i zapisu plików EXR, w tym metadanych, warstw i kanałów.
+Brak Zależności Systemowych: Nie wymaga instalowania biblioteki C++ OpenEXR na Twoim systemie. Wszystko jest zarządzane przez menedżera pakietów Cargo, co ogromnie upraszcza budowanie projektu i jego przenośność.
+Wydajność: Jest zoptymalizowana pod kątem wydajności i dobrze wykorzystuje współbieżność Rusta.

@@ -21,7 +21,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QDoubleSpinBox,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QPushButton,
 )
+from PyQt6.QtGui import QPixmap, QIcon
+from PyQt6.QtCore import QSize, pyqtSignal, QObject
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +247,7 @@ class MenuManager:
     """
     
     @staticmethod
-    def create_menu_bar(main_window, open_callback, save_callback, save_as_callback):
+    def create_menu_bar(main_window, open_callback, save_callback, save_as_callback, open_folder_callback=None):
         """
         Tworzy pasek menu.
         
@@ -250,6 +256,7 @@ class MenuManager:
             open_callback (callable): Funkcja wywoływana przy otwarciu pliku
             save_callback (callable): Funkcja wywoływana przy zapisie
             save_as_callback (callable): Funkcja wywoływana przy zapisie jako
+            open_folder_callback (callable, optional): Funkcja wywoływana przy wyborze folderu roboczego
         """
         menu_bar = main_window.menuBar()
         file_menu = menu_bar.addMenu("&Plik")
@@ -257,6 +264,13 @@ class MenuManager:
         open_action = QAction("&Otwórz...", main_window)
         open_action.triggered.connect(open_callback)
         file_menu.addAction(open_action)
+
+        # Dodaj opcję wyboru folderu roboczego
+        if open_folder_callback:
+            folder_action = QAction("Wybierz &folder roboczy...", main_window)
+            folder_action.triggered.connect(open_folder_callback)
+            file_menu.addAction(folder_action)
+            file_menu.addSeparator()
 
         save_action = QAction("&Zapisz", main_window)
         save_action.triggered.connect(save_callback)
@@ -272,4 +286,57 @@ class MenuManager:
         exit_action.triggered.connect(main_window.close)
         file_menu.addAction(exit_action)
         
-        return menu_bar 
+        return menu_bar
+
+
+class FileBrowser:
+    """
+    Klasa odpowiedzialna za przeglądarkę plików EXR.
+    """
+    
+    @staticmethod
+    def create_file_browser_widget():
+        """Tworzy widget przeglądarki plików."""
+        browser_widget = QWidget()
+        browser_layout = QVBoxLayout(browser_widget)
+        browser_layout.setContentsMargins(0, 0, 0, 0)  # Usuń marginesy
+        
+        # Lista plików z miniaturami - na całą wysokość
+        file_list = QListWidget()
+        file_list.setViewMode(QListWidget.ViewMode.IconMode)
+        file_list.setIconSize(QSize(100, 100))
+        file_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        file_list.setSpacing(5)
+        file_list.setUniformItemSizes(True)
+        browser_layout.addWidget(file_list)
+        
+        # Przycisk wyboru folderu roboczego na dole
+        folder_button = QPushButton("📁 Wybierz folder roboczy")
+        folder_button.setStyleSheet("""
+            QPushButton {
+                padding: 8px;
+                font-size: 12px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40;
+            }
+        """)
+        folder_button.setFixedHeight(40)  # Stała wysokość
+        browser_layout.addWidget(folder_button)
+        
+        # Etykieta informacyjna (opcjonalna, może być None)
+        info_label = QLabel("")
+        info_label.setStyleSheet("color: gray; font-style: italic; padding: 2px; font-size: 10px;")
+        info_label.setWordWrap(True)
+        info_label.setFixedHeight(20)  # Mniejsza wysokość
+        info_label.hide()  # Domyślnie ukryta
+        browser_layout.addWidget(info_label)
+        
+        return browser_widget, file_list, info_label, folder_button 

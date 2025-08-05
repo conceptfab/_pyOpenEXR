@@ -6,11 +6,12 @@ import sys
 import os
 import logging
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QSplitter, QFileDialog, QApplication
+from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QSplitter, QFileDialog, QApplication, QListWidgetItem
+from PyQt6.QtGui import QIcon, QPixmap
 
 from .components import (
     TreeNavigator, ImagePreview, ControlPanel, 
-    MetadataPanel, TabManager, MenuManager
+    MetadataPanel, TabManager, MenuManager, FileBrowser
 )
 from ..file_operations import FileOperationThread
 from ..data_processing import ImageProcessor, MetadataHandler
@@ -33,6 +34,7 @@ class EXREditor(QMainWindow):
         self.current_preview_data = None
         self.original_linear_data = None  # Oryginalne dane liniowe dla ekspozycji/gammy
         self.file_thread = None
+        self.working_directory = None  # Folder roboczy dla przeglądarki plików
 
         self._init_ui()
         self._create_menus()
@@ -45,23 +47,23 @@ class EXREditor(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QHBoxLayout(main_widget)
 
-        # Splitter do zmiany rozmiarów paneli
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
+        # Główny splitter do zmiany rozmiarów paneli (lewy | środek | prawy)
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(main_splitter)
 
         # --- Panel lewy: Nawigacja (Drzewo) ---
         self.tree_widget = TreeNavigator.create_tree_widget()
         self.tree_widget.currentItemChanged.connect(self.on_tree_item_selected)
-        splitter.addWidget(self.tree_widget)
+        main_splitter.addWidget(self.tree_widget)
 
-        # --- Panel centralny i prawy w jednym kontenerze ---
-        right_container = QSplitter(Qt.Orientation.Vertical)
+        # --- Panel środkowy: Kontener z podglądem i kontrolkami ---
+        middle_container = QSplitter(Qt.Orientation.Vertical)
 
-        # --- Panel centralny: Podgląd obrazu ---
+        # Podgląd obrazu
         self.image_preview = ImagePreview.create_preview_widget()
-        right_container.addWidget(self.image_preview)
+        middle_container.addWidget(self.image_preview)
 
-        # --- Panel prawy: Edycja i metadane ---
+        # Kontrolki edycji i metadane
         (self.control_widget, self.brightness_slider, self.contrast_slider, self.exposure_slider, self.gamma_slider,
          self.brightness_spinbox, self.contrast_spinbox, self.exposure_spinbox, self.gamma_spinbox) = ControlPanel.create_control_widget()
         
@@ -80,11 +82,18 @@ class EXREditor(QMainWindow):
         self.metadata_table = MetadataPanel.create_metadata_widget()
         self.tabs = TabManager.create_tab_widget(self.control_widget, self.metadata_table)
 
-        right_container.addWidget(self.tabs)
-        splitter.addWidget(right_container)
+        middle_container.addWidget(self.tabs)
+        main_splitter.addWidget(middle_container)
 
-        splitter.setSizes([300, 1300])
-        right_container.setSizes([600, 300])
+        # --- Panel prawy: Przeglądarka plików EXR ---
+        self.file_browser_widget, self.file_list, self.file_info_label, self.folder_button = FileBrowser.create_file_browser_widget()
+        self.file_list.itemClicked.connect(self.on_file_selected)
+        self.folder_button.clicked.connect(self.open_working_folder)
+        main_splitter.addWidget(self.file_browser_widget)
+
+        # Ustaw proporcje paneli: drzewo(300) | główny(1000) | przeglądarka(300)
+        main_splitter.setSizes([300, 1000, 300])
+        middle_container.setSizes([600, 300])
 
     def _create_menus(self):
         """Tworzy pasek menu."""
@@ -92,7 +101,8 @@ class EXREditor(QMainWindow):
             self, 
             self.open_file_dialog, 
             self.save_file, 
-            self.save_file_as
+            self.save_file_as,
+            self.open_working_folder
         )
 
     def open_file_dialog(self):
@@ -109,6 +119,10 @@ class EXREditor(QMainWindow):
                 from core.file_operations.exr_reader import EXRReader
                 data = EXRReader.read_exr_file(filepath)
                 self.on_file_loaded(data)
+                
+                # AUTOMATYCZNY PODGLĄD RGB PO ZAŁADOWANIU PLIKU
+                self.auto_display_rgb_preview()
+                
             except Exception as e:
                 self.on_file_error(str(e))
         else:
@@ -168,7 +182,8 @@ class EXREditor(QMainWindow):
         print(f"[INFO] Wybrano element: {item_type} w części {part_idx}", file=sys.stderr)
 
         header = part_data.get("header", {})
-        MetadataHandler.populate_metadata_table(self.metadata_table, header)
+        channels_data = part_data.get("channels", {})
+        MetadataHandler.populate_metadata_table(self.metadata_table, header, channels_data)
 
         self.current_preview_data = None
         self.original_linear_data = None
@@ -176,9 +191,22 @@ class EXREditor(QMainWindow):
         # Wybór danych do podglądu
         if item_type == "layer":
             layer_name = rest[0]
-            self.current_preview_data = ImageProcessor.prepare_preview_data(
-                part_data, "layer", layer_name=layer_name
-            )
+            # Sprawdź czy warstwa ma kanały RGB i automatycznie wyświetl podgląd RGB
+            if self._layer_has_rgb_channels(part_data, layer_name):
+                print(f"[INFO] Warstwa {layer_name} ma kanały RGB - automatyczny podgląd RGB", file=sys.stderr)
+                # Dla RGB zapisz oryginalne dane liniowe
+                self.original_linear_data = ImageProcessor.prepare_rgb_preview_linear(
+                    part_data, layer_name=layer_name
+                )
+                # I przygotuj wersję do wyświetlenia
+                self.current_preview_data = ImageProcessor.prepare_rgb_preview(
+                    part_data, layer_name=layer_name
+                )
+            else:
+                # Jeśli brak RGB, użyj standardowego podglądu warstwy
+                self.current_preview_data = ImageProcessor.prepare_preview_data(
+                    part_data, "layer", layer_name=layer_name
+                )
         elif item_type == "rgb_preview":
             layer_name = rest[0]
             # Dla RGB zapisz oryginalne dane liniowe
@@ -205,6 +233,27 @@ class EXREditor(QMainWindow):
         self.gamma_slider.setValue(220)  # 2.2
         self.gamma_spinbox.setValue(2.2)
         self.update_display()
+
+    def _layer_has_rgb_channels(self, part_data, layer_name):
+        """
+        Sprawdza czy warstwa ma kanały RGB.
+        
+        Args:
+            part_data (dict): Dane części pliku EXR
+            layer_name (str): Nazwa warstwy
+            
+        Returns:
+            bool: True jeśli warstwa ma kanały R, G, B
+        """
+        layers = part_data.get("layers", {})
+        layer_channels = layers.get(layer_name, [])
+        
+        # Szukaj kanałów R, G, B
+        has_r = any(str(ch).endswith('.R') or str(ch) == 'R' for ch in layer_channels)
+        has_g = any(str(ch).endswith('.G') or str(ch) == 'G' for ch in layer_channels)
+        has_b = any(str(ch).endswith('.B') or str(ch) == 'B' for ch in layer_channels)
+        
+        return has_r and has_g and has_b
 
     def update_display(self):
         """Aktualizuje wyświetlanie obrazu."""
@@ -239,6 +288,198 @@ class EXREditor(QMainWindow):
         
         if pixmap:
             self.image_preview.setPixmap(pixmap)
+
+    def open_working_folder(self):
+        """Otwiera okno dialogowe wyboru folderu roboczego."""
+        print("[INFO] Otwieranie okna dialogowego wyboru folderu roboczego", file=sys.stderr)
+        folder_path = QFileDialog.getExistingDirectory(
+            self, "Wybierz folder roboczy z plikami EXR", ""
+        )
+        if folder_path:
+            print(f"[INFO] Wybrano folder roboczy: {folder_path}", file=sys.stderr)
+            self.working_directory = folder_path
+            self.populate_file_browser()
+
+    def populate_file_browser(self):
+        """Wypełnia przeglądarkę plików EXR z folderu roboczego."""
+        if not self.working_directory:
+            return
+            
+        print(f"[INFO] Skanowanie folderu: {self.working_directory}", file=sys.stderr)
+        self.file_list.clear()
+        
+        # Znajdź wszystkie pliki EXR w folderze
+        exr_files = []
+        try:
+            for file_name in os.listdir(self.working_directory):
+                if file_name.lower().endswith('.exr'):
+                    file_path = os.path.join(self.working_directory, file_name)
+                    exr_files.append((file_name, file_path))
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas skanowania folderu: {e}", file=sys.stderr)
+            self.file_info_label.setText(f"Błąd podczas skanowania folderu: {e}")
+            self.file_info_label.show()
+            return
+        
+        if not exr_files:
+            self.file_info_label.setText("Brak plików EXR w wybranym folderze")
+            self.file_info_label.show()
+            return
+            
+        self.file_info_label.setText(f"Znaleziono {len(exr_files)} plików EXR")
+        self.file_info_label.show()
+        
+        # Dodaj pliki do listy z miniaturami
+        for file_name, file_path in exr_files:
+            self.add_file_to_browser(file_name, file_path)
+
+    def add_file_to_browser(self, file_name, file_path):
+        """Dodaje plik do przeglądarki z miniaturą."""
+        try:
+            # Generuj miniaturę
+            thumbnail = self.generate_thumbnail(file_path)
+            
+            # Stwórz element listy
+            item = QListWidgetItem()
+            item.setText(file_name)
+            item.setIcon(QIcon(thumbnail))
+            item.setData(Qt.ItemDataRole.UserRole, file_path)  # Przechowaj ścieżkę pliku
+            
+            # Dodaj tooltip z informacjami o pliku
+            file_size = os.path.getsize(file_path)
+            file_size_mb = file_size / (1024 * 1024)
+            tooltip = f"Plik: {file_name}\nRozmiar: {file_size_mb:.1f} MB\nŚcieżka: {file_path}"
+            item.setToolTip(tooltip)
+            
+            self.file_list.addItem(item)
+            
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas dodawania pliku {file_name}: {e}", file=sys.stderr)
+
+    def generate_thumbnail(self, file_path):
+        """Generuje miniaturę pliku EXR."""
+        try:
+            # Spróbuj załadować podstawowe informacje o pliku
+            from core.file_operations.exr_reader import EXRReader
+            
+            # Sprawdź czy to prawidłowy plik EXR
+            if not EXRReader.is_valid_exr_file(file_path):
+                return self.create_error_thumbnail("Nieprawidłowy plik EXR")
+            
+            # Wczytaj dane EXR (tylko podstawowe informacje)
+            data = EXRReader.read_exr_file(file_path)
+            
+            if not data or not data.get("parts"):
+                return self.create_error_thumbnail("Brak danych")
+            
+            part_data = data["parts"][0]
+            
+            # Spróbuj wygenerować podgląd RGB
+            preview_data = ImageProcessor.prepare_rgb_preview(part_data, "default")
+            
+            if preview_data is not None:
+                # Konwertuj na QPixmap i przeskaluj do rozmiaru miniatury
+                q_image = ImageProcessor.numpy_to_qimage(preview_data)
+                if q_image:
+                    pixmap = QPixmap.fromImage(q_image)
+                    # Przeskaluj do rozmiaru miniatury (100x100)
+                    thumbnail = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio, 
+                                            Qt.TransformationMode.SmoothTransformation)
+                    return thumbnail
+            
+            # Jeśli nie udało się wygenerować RGB, spróbuj pierwszy kanał
+            channels = part_data.get("channels", {})
+            if channels:
+                first_channel_name = list(channels.keys())[0]
+                channel_data = ImageProcessor.prepare_preview_data(
+                    part_data, "channel", channel_name=first_channel_name
+                )
+                if channel_data is not None:
+                    adjusted_data = ImageProcessor.apply_display_adjustments(channel_data, 0.0, 1.0)
+                    q_image = ImageProcessor.numpy_to_qimage(adjusted_data)
+                    if q_image:
+                        pixmap = QPixmap.fromImage(q_image)
+                        thumbnail = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
+                                                Qt.TransformationMode.SmoothTransformation)
+                        return thumbnail
+            
+            return self.create_error_thumbnail("Brak podglądu")
+            
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas generowania miniatury dla {file_path}: {e}", file=sys.stderr)
+            return self.create_error_thumbnail(f"Błąd: {str(e)[:20]}")
+
+    def create_error_thumbnail(self, error_text):
+        """Tworzy miniaturę błędu."""
+        pixmap = QPixmap(100, 100)
+        pixmap.fill(Qt.GlobalColor.lightGray)
+        return pixmap
+
+    def on_file_selected(self, item):
+        """Obsługuje wybór pliku z przeglądarki."""
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        if file_path:
+            print(f"[INFO] Wybrano plik z przeglądarki: {file_path}", file=sys.stderr)
+            self.load_file_from_path(file_path)
+
+    def load_file_from_path(self, filepath):
+        """Ładuje plik EXR z podanej ścieżki i automatycznie wyświetla podgląd RGB."""
+        try:
+            self.image_preview.setText("Ładowanie pliku, proszę czekać...")
+            QApplication.processEvents()
+            
+            from core.file_operations.exr_reader import EXRReader
+            data = EXRReader.read_exr_file(filepath)
+            self.on_file_loaded(data)
+            
+            # AUTOMATYCZNY PODGLĄD RGB PO ZAŁADOWANIU PLIKU
+            self.auto_display_rgb_preview()
+            
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas ładowania pliku: {e}", file=sys.stderr)
+            self.image_preview.setText("Nie udało się załadować pliku.")
+
+    def auto_display_rgb_preview(self):
+        """Automatycznie wyświetla podgląd RGB dla pierwszej warstwy z kanałami RGB."""
+        if not self.exr_data or not self.exr_data.get("parts"):
+            return
+            
+        print("[INFO] Szukanie warstwy RGB do automatycznego podglądu", file=sys.stderr)
+        
+        # Sprawdź pierwszą część
+        part_data = self.exr_data["parts"][0]
+        layers = part_data.get("layers", {})
+        
+        # Znajdź pierwszą warstwę z kanałami RGB
+        for layer_name, channels in layers.items():
+            if self._layer_has_rgb_channels(part_data, layer_name):
+                print(f"[INFO] Automatyczny podgląd RGB dla warstwy: {layer_name}", file=sys.stderr)
+                
+                # Załaduj dane liniowe dla ekspozycji/gammy
+                self.original_linear_data = ImageProcessor.prepare_rgb_preview_linear(
+                    part_data, layer_name=layer_name
+                )
+                
+                # Przygotuj podgląd RGB
+                self.current_preview_data = ImageProcessor.prepare_rgb_preview(
+                    part_data, layer_name=layer_name
+                )
+                
+                # Zresetuj suwaki i wyświetl
+                self.brightness_slider.setValue(0)
+                self.brightness_spinbox.setValue(0.0)
+                self.contrast_slider.setValue(100)
+                self.contrast_spinbox.setValue(1.0)
+                self.exposure_slider.setValue(0)
+                self.exposure_spinbox.setValue(0.0)
+                self.gamma_slider.setValue(220)  # 2.2
+                self.gamma_spinbox.setValue(2.2)
+                
+                # Odśwież podgląd
+                self.update_display()
+                return
+        
+        print("[INFO] Brak warstw RGB - pozostaje bez automatycznego podglądu", file=sys.stderr)
 
     def save_file(self):
         """Zapisuje plik."""
