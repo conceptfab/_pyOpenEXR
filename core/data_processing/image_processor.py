@@ -102,11 +102,12 @@ class ImageProcessor:
         # Szukaj kanałów R, G, B
         for ch_name in layer_channels:
             ch_str = str(ch_name)
-            if ch_str.endswith('.R') or ch_str == 'R':
+            ch_lower = ch_str.lower()
+            if ch_str.endswith('.R') or ch_str == 'R' or ch_str.endswith('.red') or ch_lower.endswith('red'):
                 r_ch = ch_str
-            elif ch_str.endswith('.G') or ch_str == 'G':
+            elif ch_str.endswith('.G') or ch_str == 'G' or ch_str.endswith('.green') or ch_lower.endswith('green'):
                 g_ch = ch_str
-            elif ch_str.endswith('.B') or ch_str == 'B':
+            elif ch_str.endswith('.B') or ch_str == 'B' or ch_str.endswith('.blue') or ch_lower.endswith('blue'):
                 b_ch = ch_str
         
         # Sprawdź czy mamy wszystkie kanały RGB
@@ -167,11 +168,12 @@ class ImageProcessor:
         # Szukaj kanałów R, G, B
         for ch_name in layer_channels:
             ch_str = str(ch_name)
-            if ch_str.endswith('.R') or ch_str == 'R':
+            ch_lower = ch_str.lower()
+            if ch_str.endswith('.R') or ch_str == 'R' or ch_str.endswith('.red') or ch_lower.endswith('red'):
                 r_ch = ch_str
-            elif ch_str.endswith('.G') or ch_str == 'G':
+            elif ch_str.endswith('.G') or ch_str == 'G' or ch_str.endswith('.green') or ch_lower.endswith('green'):
                 g_ch = ch_str
-            elif ch_str.endswith('.B') or ch_str == 'B':
+            elif ch_str.endswith('.B') or ch_str == 'B' or ch_str.endswith('.blue') or ch_lower.endswith('blue'):
                 b_ch = ch_str
         
         # Sprawdź czy mamy wszystkie kanały RGB
@@ -215,13 +217,19 @@ class ImageProcessor:
         if linear_image is None:
             return None
             
+        # Zabezpiecz wejściowe dane przed ekstremalnymi wartościami
+        safe_linear = np.clip(linear_image, 0.0, 100.0)
+        safe_linear = np.nan_to_num(safe_linear, nan=0.0, posinf=100.0, neginf=0.0)
+        
         # Krok 1: Zastosuj ekspozycję (na danych liniowych)
-        exposed_image = linear_image * (2.0 ** exposure)
+        with np.errstate(over='ignore', invalid='ignore'):
+            exposed_image = safe_linear * (2.0 ** np.clip(exposure, -10.0, 10.0))
 
         # Krok 2: Zastosuj korekcję gamma
         # Zabezpieczenie, aby gamma nie była zerem ani ujemna
-        safe_gamma = max(gamma, 0.01)
-        gammad_image = np.power(np.clip(exposed_image, 0.0, None), 1.0 / safe_gamma)
+        safe_gamma = np.clip(gamma, 0.01, 10.0)
+        with np.errstate(over='ignore', invalid='ignore'):
+            gammad_image = np.power(np.clip(exposed_image, 0.0, 100.0), 1.0 / safe_gamma)
         
         # Krok 3: Przygotuj do wyświetlenia
         # Ogranicz wartości do zakresu [0, 1], aby uniknąć błędów przy konwersji
@@ -238,12 +246,21 @@ class ImageProcessor:
         Konwertuje obraz z liniowej przestrzeni barw na sRGB.
         To KLUCZOWY krok, aby obraz nie był za ciemny!
         """
+        # Zabezpiecz przed ekstremalnymi wartościami HDR
+        # Ogranicz do sensownego zakresu HDR (0 do 100)
+        safe_linear = np.clip(linear_image, 0.0, 100.0)
+        
+        # Zastąp NaN i Inf zerami
+        safe_linear = np.nan_to_num(safe_linear, nan=0.0, posinf=100.0, neginf=0.0)
+        
         # Zastosuj formułę konwersji sRGB
-        srgb_image = np.where(
-            linear_image <= 0.0031308,
-            linear_image * 12.92,
-            1.055 * (linear_image ** (1/2.4)) - 0.055
-        )
+        with np.errstate(over='ignore', invalid='ignore'):
+            srgb_image = np.where(
+                safe_linear <= 0.0031308,
+                safe_linear * 12.92,
+                1.055 * (safe_linear ** (1/2.4)) - 0.055
+            )
+        
         # Ogranicz wartości do zakresu [0, 1] i konwertuj na 8-bit
         srgb_image = np.clip(srgb_image, 0.0, 1.0)
         return (srgb_image * 255).astype(np.uint8)

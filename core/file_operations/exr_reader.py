@@ -71,7 +71,7 @@ class EXRReader:
             # Grupowanie w warstwy
             print(f"[INFO] Znaleziono {len(channel_info)} kanałów", file=sys.stderr)
             for ch_name, ch_info in channel_info.items():
-                layer_name = ch_name.split(".")[0] if "." in ch_name else "default"
+                layer_name = ch_name.split(".")[0] if "." in ch_name else "Beauty"
                 part_data["layers"].setdefault(layer_name, []).append(ch_name)
 
             # Odczyt pikseli dla wszystkich kanałów naraz
@@ -171,7 +171,7 @@ class EXRReader:
             print(f"[INFO] Znaleziono {len(channel_info)} kanałów w części {part_name}", file=sys.stderr)
             for ch_name, ch_info in channel_info.items():
                 # Przetwarzanie nazwy warstwy (np. "Beauty.R" -> "Beauty")
-                layer_name = ch_name.split(".")[0] if "." in ch_name else "default"
+                layer_name = ch_name.split(".")[0] if "." in ch_name else "Beauty"
                 if layer_name not in part_data["layers"]:
                     part_data["layers"][layer_name] = []
                 part_data["layers"][layer_name].append(ch_name)

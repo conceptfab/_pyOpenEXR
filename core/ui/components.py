@@ -5,6 +5,7 @@ Moduł zawierający komponenty interfejsu użytkownika.
 import sys
 import logging
 import os
+import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
@@ -66,22 +67,37 @@ class TreeNavigator:
         )
 
         parts_iter = exr_data.get("parts", [])
+        
+        # Jeśli jest tylko jedna część i nazywa się "default", pomiń poziom części
+        single_part_default = (len(parts_iter) == 1 and 
+                              parts_iter[0].get("name", "default") == "default")
+        
         for i, part_data in enumerate(parts_iter):
             part_name = part_data.get("name", "default")
             layers = part_data.get("layers", {})
             print(f"[DEBUG] Dodawanie części do drzewa: {part_name}", file=sys.stderr)
 
-            part_item = QTreeWidgetItem(file_item, [part_name, "Part"])
-            part_item.setData(0, Qt.ItemDataRole.UserRole, ("part", i))
+            # Dla single-part z nazwą "default", dodaj warstwy bezpośrednio do pliku
+            if single_part_default:
+                parent_item = file_item
+                print("[DEBUG] Single-part plik - pomijam poziom części", file=sys.stderr)
+            else:
+                # Multi-part lub nazwana część - pokaż poziom części
+                part_item = QTreeWidgetItem(file_item, [part_name, "Part"])
+                part_item.setData(0, Qt.ItemDataRole.UserRole, ("part", i))
+                parent_item = part_item
 
             for layer_name, channel_list in layers.items():
                 print(f"[DEBUG] Dodawanie warstwy do drzewa: {layer_name} ({len(channel_list)} kanałów)", file=sys.stderr)
-                layer_item = QTreeWidgetItem(part_item, [layer_name, "Warstwa"])
+                layer_item = QTreeWidgetItem(parent_item, [layer_name, "Warstwa"])
                 layer_item.setData(0, Qt.ItemDataRole.UserRole, ("layer", i, layer_name))
 
-                # Dodaj opcję podglądu RGB dla warstwy
-                rgb_item = QTreeWidgetItem(layer_item, ["RGB Podgląd", "RGB"])
-                rgb_item.setData(0, Qt.ItemDataRole.UserRole, ("rgb_preview", i, layer_name))
+                # Sprawdź czy warstwa ma sens dla podglądu RGB
+                should_show = TreeNavigator._should_show_rgb_preview(part_data, layer_name)
+                print(f"[DEBUG] Decyzja RGB podgląd dla {layer_name}: {should_show}", file=sys.stderr)
+                if should_show:
+                    rgb_item = QTreeWidgetItem(layer_item, ["RGB Podgląd", "RGB"])
+                    rgb_item.setData(0, Qt.ItemDataRole.UserRole, ("rgb_preview", i, layer_name))
 
                 for ch_name in channel_list:
                     ch_name_s = str(ch_name)
@@ -90,6 +106,105 @@ class TreeNavigator:
 
         tree_widget.expandAll()
         print("[INFO] Drzewo nawigacji zostało zaktualizowane", file=sys.stderr)
+    
+    @staticmethod
+    def _should_show_rgb_preview(part_data, layer_name):
+        """
+        Sprawdza czy warstwa powinna mieć opcję podglądu RGB.
+        
+        Args:
+            part_data (dict): Dane części pliku EXR
+            layer_name (str): Nazwa warstwy
+            
+        Returns:
+            bool: True jeśli RGB podgląd ma sens
+        """
+        channels = part_data.get("channels", {})
+        layers = part_data.get("layers", {})
+        layer_channels = layers.get(layer_name, [])
+        
+        # Znajdź kanały RGB
+        r_ch = None
+        g_ch = None  
+        b_ch = None
+        
+        for ch_name in layer_channels:
+            ch_str = str(ch_name)
+            ch_lower = ch_str.lower()
+            if ch_str.endswith('.R') or ch_str == 'R' or ch_str.endswith('.red') or ch_lower.endswith('red'):
+                r_ch = ch_str
+            elif ch_str.endswith('.G') or ch_str == 'G' or ch_str.endswith('.green') or ch_lower.endswith('green'):
+                g_ch = ch_str
+            elif ch_str.endswith('.B') or ch_str == 'B' or ch_str.endswith('.blue') or ch_lower.endswith('blue'):
+                b_ch = ch_str
+        
+        # Jeśli brak wszystkich kanałów RGB, nie pokazuj podglądu RGB
+        if not (r_ch and g_ch and b_ch):
+            print(f"[DEBUG] Warstwa {layer_name} - brak kanałów RGB: R={r_ch}, G={g_ch}, B={b_ch}, kanały={layer_channels}", file=sys.stderr)
+            return False
+        
+        print(f"[DEBUG] Warstwa {layer_name} - znaleziono kanały RGB: R={r_ch}, G={g_ch}, B={b_ch}", file=sys.stderr)
+            
+        # Pobierz dane kanałów
+        r_data = channels.get(r_ch)
+        g_data = channels.get(g_ch)
+        b_data = channels.get(b_ch)
+        
+        if r_data is None or g_data is None or b_data is None:
+            return False
+        
+        try:
+            # Sprawdź czy kanały są identyczne (np. alpha/ID pass)
+            # Porównaj tylko fragmenty dla wydajności (10x10 pikseli z kilku miejsc)
+            sample_size = min(10, min(r_data.shape))
+            if sample_size < 2:
+                # Za małe dane - pokaż RGB podgląd
+                print(f"[DEBUG] Warstwa {layer_name} - za małe dane, pokazuję RGB podgląd", file=sys.stderr)
+                return True
+            
+            # Sprawdź kilka próbek z różnych miejsc obrazu
+            samples_match = 0
+            total_samples = 0
+            
+            # Próbki z różnych miejsc: lewy górny, środek, prawy dolny
+            positions = [
+                (0, 0),  # lewy górny
+                (r_data.shape[0]//2, r_data.shape[1]//2) if len(r_data.shape) > 1 else (r_data.shape[0]//2,),  # środek
+                (r_data.shape[0]-sample_size, r_data.shape[1]-sample_size) if len(r_data.shape) > 1 else (r_data.shape[0]-sample_size,)  # prawy dolny
+            ]
+            
+            for pos in positions:
+                if len(r_data.shape) == 2:  # 2D array
+                    if pos[0] + sample_size <= r_data.shape[0] and pos[1] + sample_size <= r_data.shape[1]:
+                        r_sample = r_data[pos[0]:pos[0]+sample_size, pos[1]:pos[1]+sample_size]
+                        g_sample = g_data[pos[0]:pos[0]+sample_size, pos[1]:pos[1]+sample_size]
+                        b_sample = b_data[pos[0]:pos[0]+sample_size, pos[1]:pos[1]+sample_size]
+                else:  # 1D array
+                    if pos[0] + sample_size <= r_data.shape[0]:
+                        r_sample = r_data[pos[0]:pos[0]+sample_size]
+                        g_sample = g_data[pos[0]:pos[0]+sample_size]
+                        b_sample = b_data[pos[0]:pos[0]+sample_size]
+                    else:
+                        continue
+                
+                total_samples += 1
+                
+                # Sprawdź czy próbka ma identyczne wartości
+                if np.array_equal(r_sample, g_sample) and np.array_equal(g_sample, b_sample):
+                    samples_match += 1
+            
+            # Jeśli wszystkie próbki są identyczne, to prawdopodobnie alpha/ID pass
+            if total_samples > 0 and samples_match == total_samples:
+                print(f"[DEBUG] Warstwa {layer_name} ma identyczne kanały RGB we wszystkich próbkach - pomijam RGB podgląd", file=sys.stderr)
+                return False
+            else:
+                print(f"[DEBUG] Warstwa {layer_name} ma różne kanały RGB ({samples_match}/{total_samples} próbek identycznych) - dodaję RGB podgląd", file=sys.stderr)
+                return True
+                
+        except Exception as e:
+            print(f"[WARN] Błąd przy sprawdzaniu kanałów RGB dla {layer_name}: {e}", file=sys.stderr)
+            # W przypadku błędu, domyślnie pokaż RGB podgląd
+            return True
 
 
 class ImagePreview:

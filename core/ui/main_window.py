@@ -249,9 +249,9 @@ class EXREditor(QMainWindow):
         layer_channels = layers.get(layer_name, [])
         
         # Szukaj kanałów R, G, B
-        has_r = any(str(ch).endswith('.R') or str(ch) == 'R' for ch in layer_channels)
-        has_g = any(str(ch).endswith('.G') or str(ch) == 'G' for ch in layer_channels)
-        has_b = any(str(ch).endswith('.B') or str(ch) == 'B' for ch in layer_channels)
+        has_r = any(str(ch).endswith('.R') or str(ch) == 'R' or str(ch).endswith('.red') or str(ch).lower().endswith('red') for ch in layer_channels)
+        has_g = any(str(ch).endswith('.G') or str(ch) == 'G' or str(ch).endswith('.green') or str(ch).lower().endswith('green') for ch in layer_channels)
+        has_b = any(str(ch).endswith('.B') or str(ch) == 'B' or str(ch).endswith('.blue') or str(ch).lower().endswith('blue') for ch in layer_channels)
         
         return has_r and has_g and has_b
 
@@ -375,7 +375,23 @@ class EXREditor(QMainWindow):
             part_data = data["parts"][0]
             
             # Spróbuj wygenerować podgląd RGB
-            preview_data = ImageProcessor.prepare_rgb_preview(part_data, "default")
+            # Znajdź warstwę z kanałami RGB (zazwyczaj "Beauty" lub pierwsza dostępna)
+            layers = part_data.get("layers", {})
+            rgb_layer = None
+            
+            # Najpierw sprawdź "Beauty" (nowa nazwa), potem "default" (dla starych plików)
+            for layer_name in ["Beauty", "default"]:
+                if layer_name in layers:
+                    rgb_layer = layer_name
+                    break
+            
+            # Jeśli nie znaleziono, weź pierwszą dostępną warstwę
+            if not rgb_layer and layers:
+                rgb_layer = list(layers.keys())[0]
+            
+            preview_data = None
+            if rgb_layer:
+                preview_data = ImageProcessor.prepare_rgb_preview(part_data, rgb_layer)
             
             if preview_data is not None:
                 # Konwertuj na QPixmap i przeskaluj do rozmiaru miniatury
