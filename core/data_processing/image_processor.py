@@ -5,6 +5,8 @@ Moduł do przetwarzania obrazów EXR.
 import sys
 import logging
 import numpy as np
+from functools import lru_cache
+import numba
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtCore import Qt
 
@@ -202,43 +204,91 @@ class ImageProcessor:
             return None
     
     @staticmethod
+    @lru_cache(maxsize=128)
+    def _cached_gamma_correction(gamma_value):
+        """Cache'uje obliczenia gamma dla często używanych wartości."""
+        return 1.0 / max(min(gamma_value, 10.0), 0.01)  # Bezpieczne ograniczenie bez np.clip
+
+    @staticmethod
     def apply_color_correction(linear_image, exposure=0.0, gamma=2.2):
         """
-        Stosuje korekcję ekspozycji i gammy do liniowych danych obrazu.
-
-        Args:
-            linear_image (np.array): Tablica NumPy z danymi float (liniowymi).
-            exposure (float): Wartość ekspozycji w "przystankach" (stops).
-            gamma (float): Wartość gammy.
-
-        Returns:
-            np.array: Tablica NumPy uint8 (0-255) gotowa do wyświetlenia.
+        Bardzo zoptymalizowana wersja z cache'owaniem gamma i vectorization.
         """
         if linear_image is None:
             return None
             
+        try:
+            # Spróbuj użyć numba jeśli dostępne
+            return ImageProcessor._apply_correction_fast(linear_image, exposure, gamma)
+        except (ImportError, Exception):
+            # Fallback do standardowej wersji
+            return ImageProcessor._apply_correction_standard(linear_image, exposure, gamma)
+    
+    @staticmethod
+    def _apply_correction_standard(linear_image, exposure, gamma):
+        """Standardowa wersja z cache'owaniem gamma."""
         # Zabezpiecz wejściowe dane przed ekstremalnymi wartościami
         safe_linear = np.clip(linear_image, 0.0, 100.0)
         safe_linear = np.nan_to_num(safe_linear, nan=0.0, posinf=100.0, neginf=0.0)
         
         # Krok 1: Zastosuj ekspozycję (na danych liniowych)
+        exposure_factor = 2.0 ** max(min(exposure, 10.0), -10.0)  # Bezpieczne ograniczenie
         with np.errstate(over='ignore', invalid='ignore'):
-            exposed_image = safe_linear * (2.0 ** np.clip(exposure, -10.0, 10.0))
+            exposed_image = safe_linear * exposure_factor
 
-        # Krok 2: Zastosuj korekcję gamma
-        # Zabezpieczenie, aby gamma nie była zerem ani ujemna
-        safe_gamma = np.clip(gamma, 0.01, 10.0)
+        # Krok 2: Zastosuj korekcję gamma z cache
+        gamma_inv = ImageProcessor._cached_gamma_correction(gamma)
         with np.errstate(over='ignore', invalid='ignore'):
-            gammad_image = np.power(np.clip(exposed_image, 0.0, 100.0), 1.0 / safe_gamma)
+            gammad_image = np.power(np.clip(exposed_image, 0.0, 100.0), gamma_inv)
         
         # Krok 3: Przygotuj do wyświetlenia
-        # Ogranicz wartości do zakresu [0, 1], aby uniknąć błędów przy konwersji
         clipped_image = np.clip(gammad_image, 0.0, 1.0)
-        
-        # Konwertuj na 8-bitowy format całkowitoliczbowy (0-255)
         final_image_uint8 = (clipped_image * 255).astype(np.uint8)
 
         return final_image_uint8
+    
+    @staticmethod
+    def _apply_correction_fast(linear_image, exposure, gamma):
+        """Szybka wersja - spróbuj użyć numba jeśli dostępne."""
+        try:
+            import numba
+            # Użyj numba tylko jeśli jest zainstalowane
+            return ImageProcessor._apply_correction_numba_impl(linear_image, exposure, gamma)
+        except ImportError:
+            # Jeśli numba nie jest dostępne, użyj standardowej wersji
+            return ImageProcessor._apply_correction_standard(linear_image, exposure, gamma)
+    
+    @staticmethod
+    def _apply_correction_numba_impl(linear_image, exposure, gamma):
+        """Implementacja numba - kompiluje się przy pierwszym użyciu."""
+        import numba
+        
+        @numba.jit(nopython=True, cache=True)
+        def _numba_correction(img, exp, gam):
+            # Zabezpiecz dane
+            img_safe = np.where(img > 100.0, 100.0, img)
+            img_safe = np.where(img_safe < 0.0, 0.0, img_safe)
+            
+            # Ekspozycja
+            exp_safe = max(min(exp, 10.0), -10.0)
+            exp_factor = 2.0 ** exp_safe
+            exposed = img_safe * exp_factor
+            
+            # Gamma
+            gam_safe = max(min(gam, 10.0), 0.01)
+            gam_inv = 1.0 / gam_safe
+            
+            # Zastosuj gamma
+            exposed_clipped = np.where(exposed > 100.0, 100.0, exposed)
+            exposed_clipped = np.where(exposed_clipped < 0.0, 0.0, exposed_clipped)
+            gammad = np.power(exposed_clipped, gam_inv)
+            
+            # Konwersja do uint8
+            final = np.where(gammad > 1.0, 1.0, gammad)
+            final = np.where(final < 0.0, 0.0, final)
+            return (final * 255.0).astype(np.uint8)
+        
+        return _numba_correction(linear_image, exposure, gamma)
     
     @staticmethod
     def linear_to_srgb(linear_image):

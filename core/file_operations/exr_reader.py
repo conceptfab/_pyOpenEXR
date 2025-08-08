@@ -15,12 +15,34 @@ class EXRReader:
     """
     Klasa odpowiedzialna za odczyt plików OpenEXR.
     """
+    _file_cache = {}
+    _thumbnail_cache = {}
     
     @staticmethod
     def is_valid_exr_file(filepath):
         """Sprawdza czy plik jest prawidłowym plikiem OpenEXR."""
         return OpenEXR.isOpenExrFile(filepath)
     
+    @staticmethod
+    def read_exr_file_cached(filepath):
+        """Wersja z cache'owaniem dla często używanych plików."""
+        if filepath in EXRReader._file_cache:
+            return EXRReader._file_cache[filepath]
+        
+        data = EXRReader.read_exr_file(filepath)
+        EXRReader._file_cache[filepath] = data
+        return data
+    
+    @staticmethod
+    def _process_channel_data_fast(raw_data, dtype, shape):
+        """Szybka konwersja danych kanałów (bez JIT - numba ma problemy z frombuffer)."""
+        try:
+            arr = np.frombuffer(raw_data, dtype=dtype)
+            return arr.reshape(shape)
+        except Exception:
+            # Fallback dla problemów z frombuffer
+            return np.array(raw_data, dtype=dtype).reshape(shape)
+
     @staticmethod
     def read_exr_file(filepath):
         print(f"[INFO] Sprawdzanie czy plik jest prawidłowym plikiem OpenEXR: {filepath}", file=sys.stderr)
@@ -129,8 +151,10 @@ class EXRReader:
                     dtype = np.float16
                 
                 try:
-                    arr = np.frombuffer(pixels_dict[ch_name], dtype=dtype)
-                    arr.shape = (size[1], size[0])
+                    # Użyj zoptymalizowanej funkcji dla szybszego przetwarzania
+                    arr = EXRReader._process_channel_data_fast(
+                        pixels_dict[ch_name], dtype, (size[1], size[0])
+                    )
                     part_data["channels"][ch_name] = arr
                     print(f"[DEBUG] Załadowano kanał: {ch_name} (typ: {dtype})", file=sys.stderr)
                 except Exception as e:

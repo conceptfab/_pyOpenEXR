@@ -5,6 +5,8 @@ Główne okno aplikacji EXR Editor.
 import sys
 import os
 import logging
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QSplitter, QFileDialog, QApplication, QListWidgetItem
 from PyQt6.QtGui import QIcon, QPixmap
@@ -35,6 +37,7 @@ class EXREditor(QMainWindow):
         self.original_linear_data = None  # Oryginalne dane liniowe dla ekspozycji/gammy
         self.file_thread = None
         self.working_directory = None  # Folder roboczy dla przeglądarki plików
+        self.thumbnail_cache = {}  # Cache dla miniatur
 
         self._init_ui()
         self._create_menus()
@@ -117,7 +120,7 @@ class EXREditor(QMainWindow):
             # --- ŁADOWANIE SYNCHRONICZNE ---
             try:
                 from core.file_operations.exr_reader import EXRReader
-                data = EXRReader.read_exr_file(filepath)
+                data = EXRReader.read_exr_file_cached(filepath)
                 self.on_file_loaded(data)
                 
                 # AUTOMATYCZNY PODGLĄD RGB PO ZAŁADOWANIU PLIKU
@@ -256,16 +259,28 @@ class EXREditor(QMainWindow):
         return has_r and has_g and has_b
 
     def update_display(self):
-        """Aktualizuje wyświetlanie obrazu."""
+        """Aktualizuje wyświetlanie obrazu z optymalizacjami."""
         if self.current_preview_data is None:
             self.image_preview.clear()
             return
 
+        # Cache ostatnich wartości, aby uniknąć niepotrzebnych przeliczeń
+        if not hasattr(self, '_last_display_params'):
+            self._last_display_params = None
+            
         # Pobierz wartości z suwaków
         brightness = self.brightness_slider.value() / 100.0
         contrast = self.contrast_slider.value() / 100.0
         exposure = self.exposure_slider.value() / 100.0  # -5.0 do +5.0
         gamma = self.gamma_slider.value() / 100.0  # 0.5 do 5.0
+        
+        current_params = (brightness, contrast, exposure, gamma)
+        
+        # Jeśli parametry się nie zmieniły, nie przeliczaj
+        if self._last_display_params == current_params:
+            return
+            
+        self._last_display_params = current_params
 
         # Sprawdź czy mamy oryginalne dane liniowe (dla RGB)
         if self.original_linear_data is not None:
@@ -301,14 +316,14 @@ class EXREditor(QMainWindow):
             self.populate_file_browser()
 
     def populate_file_browser(self):
-        """Wypełnia przeglądarkę plików EXR z folderu roboczego."""
+        """Wielowątkowa wersja generowania miniatur."""
         if not self.working_directory:
             return
             
         print(f"[INFO] Skanowanie folderu: {self.working_directory}", file=sys.stderr)
         self.file_list.clear()
         
-        # Znajdź wszystkie pliki EXR w folderze
+        # Znajdź pliki EXR
         exr_files = []
         try:
             for file_name in os.listdir(self.working_directory):
@@ -329,16 +344,31 @@ class EXREditor(QMainWindow):
         self.file_info_label.setText(f"Znaleziono {len(exr_files)} plików EXR")
         self.file_info_label.show()
         
-        # Dodaj pliki do listy z miniaturami
-        for file_name, file_path in exr_files:
-            self.add_file_to_browser(file_name, file_path)
+        # Generuj miniatury wielowątkowo
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(self.generate_thumbnail, fp): (fn, fp) 
+                      for fn, fp in exr_files}
+            
+            for future in concurrent.futures.as_completed(futures):
+                file_name, file_path = futures[future]
+                try:
+                    thumbnail = future.result()
+                    self.add_file_to_browser_with_thumbnail(file_name, file_path, thumbnail)
+                except Exception as e:
+                    print(f"[ERROR] Błąd miniaturki {file_name}: {e}", file=sys.stderr)
 
     def add_file_to_browser(self, file_name, file_path):
         """Dodaje plik do przeglądarki z miniaturą."""
         try:
             # Generuj miniaturę
             thumbnail = self.generate_thumbnail(file_path)
-            
+            self.add_file_to_browser_with_thumbnail(file_name, file_path, thumbnail)
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas dodawania pliku {file_name}: {e}", file=sys.stderr)
+    
+    def add_file_to_browser_with_thumbnail(self, file_name, file_path, thumbnail):
+        """Dodaje plik do przeglądarki z gotową miniaturą."""
+        try:
             # Stwórz element listy
             item = QListWidgetItem()
             item.setText(file_name)
@@ -357,17 +387,24 @@ class EXREditor(QMainWindow):
             print(f"[ERROR] Błąd podczas dodawania pliku {file_name}: {e}", file=sys.stderr)
 
     def generate_thumbnail(self, file_path):
-        """Generuje miniaturę pliku EXR."""
+        """Generuje miniaturę pliku EXR z cache'owaniem."""
+        
+        # Sprawdź cache miniatur
+        if file_path in self.thumbnail_cache:
+            return self.thumbnail_cache[file_path]
+            
         try:
             # Spróbuj załadować podstawowe informacje o pliku
             from core.file_operations.exr_reader import EXRReader
             
             # Sprawdź czy to prawidłowy plik EXR
             if not EXRReader.is_valid_exr_file(file_path):
-                return self.create_error_thumbnail("Nieprawidłowy plik EXR")
+                thumbnail = self.create_error_thumbnail("Nieprawidłowy plik EXR")
+                self.thumbnail_cache[file_path] = thumbnail
+                return thumbnail
             
-            # Wczytaj dane EXR (tylko podstawowe informacje)
-            data = EXRReader.read_exr_file(file_path)
+            # Wczytaj dane EXR z cache'em dla szybkości
+            data = EXRReader.read_exr_file_cached(file_path)
             
             if not data or not data.get("parts"):
                 return self.create_error_thumbnail("Brak danych")
@@ -401,6 +438,8 @@ class EXREditor(QMainWindow):
                     # Przeskaluj do rozmiaru miniatury (100x100)
                     thumbnail = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio, 
                                             Qt.TransformationMode.SmoothTransformation)
+                    # Cache'uj miniaturę
+                    self.thumbnail_cache[file_path] = thumbnail
                     return thumbnail
             
             # Jeśli nie udało się wygenerować RGB, spróbuj pierwszy kanał
@@ -417,13 +456,19 @@ class EXREditor(QMainWindow):
                         pixmap = QPixmap.fromImage(q_image)
                         thumbnail = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
                                                 Qt.TransformationMode.SmoothTransformation)
+                        # Cache'uj miniaturę
+                        self.thumbnail_cache[file_path] = thumbnail
                         return thumbnail
             
-            return self.create_error_thumbnail("Brak podglądu")
+            thumbnail = self.create_error_thumbnail("Brak podglądu")
+            self.thumbnail_cache[file_path] = thumbnail
+            return thumbnail
             
         except Exception as e:
             print(f"[ERROR] Błąd podczas generowania miniatury dla {file_path}: {e}", file=sys.stderr)
-            return self.create_error_thumbnail(f"Błąd: {str(e)[:20]}")
+            thumbnail = self.create_error_thumbnail(f"Błąd: {str(e)[:20]}")
+            self.thumbnail_cache[file_path] = thumbnail
+            return thumbnail
 
     def create_error_thumbnail(self, error_text):
         """Tworzy miniaturę błędu."""
@@ -445,7 +490,7 @@ class EXREditor(QMainWindow):
             QApplication.processEvents()
             
             from core.file_operations.exr_reader import EXRReader
-            data = EXRReader.read_exr_file(filepath)
+            data = EXRReader.read_exr_file_cached(filepath)
             self.on_file_loaded(data)
             
             # AUTOMATYCZNY PODGLĄD RGB PO ZAŁADOWANIU PLIKU
